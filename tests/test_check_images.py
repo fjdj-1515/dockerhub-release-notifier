@@ -71,7 +71,7 @@ def test_incremental_run_notifies_new_and_stops_paging_at_old_tags():
                 [
                     ("v3.7.20-nanoserver-ltsc2025", "2026-11-13T12:00:00Z"),
                     ("v3.7.20", "2026-11-13T12:00:00Z"),
-                    ("3.7.20", "2026-11-13T12:00:00Z"),
+                    ("3.7.20", "2026-11-13T11:58:30.123456789Z"),
                     ("v3.7", "2026-11-13T12:00:00Z"),
                     ("3.8.0-rc.3", "2026-11-13T12:00:00Z"),
                     ("v3.7.19", "2026-11-01T00:00:00Z"),
@@ -84,6 +84,8 @@ def test_incremental_run_notifies_new_and_stops_paging_at_old_tags():
 
     assert len(hub.calls) == 1  # 最後のタグが 2 日以上前なので次のページは取らない
     assert [(u.image.name, u.versions) for u in result.updates] == [("library/traefik", [V("3.7.20")])]
+    # v3.7.20 と 3.7.20 のうち早いほうの push 日時
+    assert result.updates[0].pushed_at == {V("3.7.20"): datetime(2026, 11, 13, 11, 58, 30, 123456, tzinfo=UTC)}
     assert result.state.images["library/traefik"] == ImageState(NOW, {V("2.11.63"), V("3.7.19"), V("3.7.20")})
     # 元の state は変更しない
     assert state.images["library/traefik"].last_checked == prev_checked
@@ -116,17 +118,36 @@ def test_not_found_message():
 def test_messages_built_only_when_something_happened():
     assert discord.build_messages([], []) == []
 
+    pushed = datetime(2026, 11, 13, 20, 10, 25, tzinfo=UTC)
     msgs = discord.build_messages(
-        [discord.Update(Image("library/traefik"), [V("3.7.20"), V("2.11.64")])],
+        [discord.Update(Image("library/traefik"), [V("3.7.20"), V("2.11.64")], {V("3.7.20"): pushed})],
         [discord.FetchFailure(Image("library/nginx"), "HTTP 503")],
     )
     assert len(msgs) == 1
     fields = msgs[0]["embeds"][0]["fields"]
     assert fields[0]["name"] == "library/traefik"
-    assert fields[0]["value"].startswith("`2.11.64`, `3.7.20`")
-    assert "https://hub.docker.com/_/traefik/tags" in fields[0]["value"]
+    assert fields[0]["value"] == (
+        "`2.11.64`\n"
+        f"`3.7.20` release: <t:{int(pushed.timestamp())}:d>\n"
+        "[Tags](https://hub.docker.com/_/traefik/tags)"
+    )
     assert fields[1]["name"] == discord.ERROR_FIELD_NAME
     assert "`library/nginx`: HTTP 503" in fields[1]["value"]
+
+    text = discord.render_text(msgs[0])
+    assert "<t:" not in text
+    assert "`3.7.20` release: 2026/11/1" in text
+
+
+def test_long_version_list_is_truncated():
+    versions = [V(f"1.0.{i}") for i in range(200)]
+    field = discord.build_messages([discord.Update(Image("ns/img"), versions)], [])[0]["embeds"][0]["fields"][0]
+    assert len(field["value"]) <= discord.MAX_FIELD_VALUE
+    lines = field["value"].splitlines()
+    assert lines[-1].startswith("[Tags]")
+    assert lines[-2].startswith("…ほか ")
+    shown = len(lines) - 2
+    assert lines[-2] == f"…ほか {200 - shown} 件"
 
 
 def test_messages_split_when_too_many_fields():

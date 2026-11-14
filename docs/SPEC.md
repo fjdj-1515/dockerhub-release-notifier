@@ -121,18 +121,24 @@ name = "requarks/wiki"
 🐳 Docker Hub 新バージョン
 
 library/traefik
-  2.11.64, 3.7.20
-  https://hub.docker.com/_/traefik/tags
+  2.11.64 release: 2026/11/14
+  3.7.20 release: 2026/11/14
+  Tags（https://hub.docker.com/_/traefik/tags へのリンク）
 
 requarks/wiki
-  3.3.2
-  https://hub.docker.com/r/requarks/wiki/tags
+  3.3.2 release: 2026/11/15
+  Tags（https://hub.docker.com/r/requarks/wiki/tags へのリンク）
 
 ⚠️ 取得失敗
   library/nginx: HTTP 503
 ```
 
-- 各イメージのバージョンは昇順で並べる。
+- 各イメージのバージョンは昇順で、1 バージョン 1 行で並べる。
+- 各バージョンに Docker Hub へ push された日時を付ける。
+  - Docker Hub にはリリース日時の項目がないため、タグの `last_updated`（push 日時）を使う。新しく出たバージョンでは、これが Docker Hub に公開された日時になる。
+  - `v3.7.20` と `3.7.20` のように同じバージョンのタグが複数あれば、いちばん早い日時を使う。
+  - `release: <t:UNIX秒:d>` の形（Discord のタイムスタンプ書式）で日付だけを表示する。時刻はホバーで見られる。日付は見る人の端末のタイムゾーンで決まる。`--dry-run` では実行環境のタイムゾーンで表示する。
+- 1 つのフィールドに収まらないほどバージョンが多い場合は、入りきらない分を「…ほか N 件」とまとめる。
 - Discord の制限（フィールド数は 25 まで、合計 6000 文字まで）を超えた場合は、メッセージを分けて送る。
 
 ## エラー処理

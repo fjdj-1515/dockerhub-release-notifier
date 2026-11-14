@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
@@ -15,10 +15,10 @@ from typing import Any
 from . import discord, http
 from .config import ConfigError, Image, load_dotenv, load_images
 from .discord import FetchFailure, Update
-from .dockerhub import REQUEST_INTERVAL, iter_tags
+from .dockerhub import REQUEST_INTERVAL, Tag, iter_tags
 from .state import ImageState, State, StateError, load_state, save_state
 from .timeutil import now as utc_now
-from .versions import eligible_versions, find_new_versions, parse_tag
+from .versions import Version, eligible_versions, find_new_versions, parse_tag
 
 log = logging.getLogger("dockerhub_release_notifier")
 
@@ -74,13 +74,25 @@ def check_images(
         new = find_new_versions(fetched, prev.known_versions)
         if new:
             log.info("%s: new version(s): %s", image.name, ", ".join(map(str, new)))
-            result.updates.append(Update(image, new))
+            result.updates.append(Update(image, new, pushed_times(tags, new)))
         else:
             log.info("%s: no new versions", image.name)
         known = prev.known_versions | eligible_versions(fetched, prev.known_versions)
         result.state.images[image.name] = ImageState(now, known)
 
     return result
+
+
+def pushed_times(tags: Iterable[Tag], versions: Iterable[Version]) -> dict[Version, datetime]:
+    """バージョンごとの push 日時。`v3.7.19` と `3.7.19` のように同じバージョンの
+    タグが複数あれば、いちばん早いものを使う。"""
+    wanted = set(versions)
+    times: dict[Version, datetime] = {}
+    for t in tags:
+        v = parse_tag(t.name)
+        if v in wanted and t.last_updated is not None:
+            times[v] = min(times.get(v, t.last_updated), t.last_updated)
+    return times
 
 
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
