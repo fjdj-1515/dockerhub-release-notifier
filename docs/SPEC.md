@@ -99,12 +99,14 @@ name = "requarks/wiki"
 1. `images.toml` と `state.json` を読み込む。
 2. イメージごとに Docker Hub API からタグを取得する。
    - `GET https://hub.docker.com/v2/repositories/{ns}/{repo}/tags?page_size=100&ordering=last_updated`
-   - **初回**（`state.json` にそのイメージがない）: 全ページを取得する。
-   - **2回目以降**: ページの最後のタグの `last_updated` が `last_checked` より 2 日以上前になった時点で取得を止める。上限は 10 ページ。
+   - **初回**（`state.json` にそのイメージがない）: 取得できる上限の 10 ページ（1,000 件）まで取得する。
+   - **2回目以降**: ページの最後のタグの `last_updated` が `last_checked` より 2 日以上前になった時点で取得を止める。上限は同じく 10 ページ。
+   - ログインなしの API では 10 ページより先を取得できない（11 ページ目で HTTP 403 `pagination offset too large for anonymous requests`）。そのため初回に記録されるのは、最近更新された 1,000 件に含まれるバージョンだけになる。
    - リクエストの間隔は 1 秒空ける。
 3. 対象タグに絞り込み、バージョン番号に正規化する。`x.y` タグは「`x.y` タグの扱い」の条件で絞り込む。
 4. `known_versions` に含まれていないものを新しいバージョンとする。
    - 古いタグが再ビルドされて `last_updated` が新しくなっても、`known_versions` に含まれていれば通知しない。
+   - 同じ `x.y` 系列で記録済みのものよりパッチ番号が小さい `x.y.z` は、通知せずに記録だけする。初回の 1,000 件に入らなかった古いタグが再ビルドされて出てきた場合に、新しいバージョンと誤判定しないため（新しいリリースは必ずパッチ番号が上がる）。
 5. **初回のイメージ**: 取得したバージョンを記録するだけで、通知しない。
 6. 全イメージの新しいバージョンと取得エラーを 1 通にまとめて Discord に送る。
    - 新しいバージョンもエラーもなければ、何も送らない。
@@ -140,7 +142,7 @@ requarks/wiki
 | 特定イメージの API 取得失敗（ネットワークエラー、HTTP 4xx/5xx） | 最大 3 回再試行する。それでも失敗したら、そのイメージの記録は更新せず、通知にエラーとして含める |
 | HTTP 429（レート制限） | `Retry-After` に従って待ってから再試行する |
 | イメージが存在しない（404） | 再試行せず、エラーとして通知する |
-| `images.toml` の書式エラー | 終了コード 1 で終了し、stderr に出力する（通知はしない） |
+| `images.toml` の書式エラー、`state.json` の破損 | 終了コード 1 で終了し、stderr に出力する（通知はしない） |
 | `DISCORD_WEBHOOK_URL` が未設定 | 終了コード 1 で終了する |
 | Discord への送信失敗 | 終了コード 1 で終了し、`state.json` は更新しない |
 
@@ -150,7 +152,8 @@ requarks/wiki
 uv run dockerhub-release-notifier --config images.toml --state state.json
 ```
 
-- `--config` / `--state` は省略可能で、省略時はカレントディレクトリの `images.toml` / `state.json` を使う。
+- `--config` / `--state` / `--env-file` は省略可能で、省略時はカレントディレクトリの `images.toml` / `state.json` / `.env` を使う。
+- `.env` の値は、同じ名前の環境変数がすでに設定されていれば使わない（環境変数が優先）。
 - `--dry-run`: Discord には送らず、送る内容を標準出力に表示する。`state.json` も更新しない。
 - ログは標準出力に出し、cron 側でファイルにリダイレクトする想定。
 
