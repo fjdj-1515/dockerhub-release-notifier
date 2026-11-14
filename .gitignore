@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+
+# 実行時に生成・個人設定
+.env
+state.json
+*.log
