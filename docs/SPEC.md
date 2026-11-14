@@ -5,7 +5,7 @@ Docker Hub 上の指定イメージに新しいバージョン（`x.y.z` 形式�
 ## 前提
 
 - 実行環境: 自宅 Linux サーバ、cron で 1 日 1 回実行
-- 言語: Python 3.15（stable の最新。標準ライブラリのみで実装し、外部依存なし）
+- 言語: Python 3.15（stable の最新）。本体は標準ライブラリだけで実装する（実行時の外部依存なし）。テストには pytest を使う。
 - 実行・Python バージョン管理: [uv](https://docs.astral.sh/uv/)
 - 通知先: Discord Webhook
 
@@ -14,7 +14,10 @@ Docker Hub 上の指定イメージに新しいバージョン（`x.y.z` 形式�
 - `uv init --package` で作成した構成（`src/dockerhub_release_notifier/`）を使う。
 - `pyproject.toml` に `requires-python = ">=3.15"` と、コマンド `dockerhub-release-notifier` のエントリポイントを定義する。
 - `.python-version` は `3.15` とする。サーバに入っている Python のバージョンに関係なく、uv が 3.15 系の最新パッチ版を用意する。新しい stable が出たら、このファイルと `requires-python` を上げる。
-- 実行時の外部依存はなし（`dependencies = []`）。開発用ツール（テストなど）は必要になったら dev 依存として追加する。
+- 依存関係:
+  - 実行時の依存はなし（`dependencies = []`）。
+  - 開発用の依存は `[dependency-groups]` の `dev` に置く。現在は `pytest` のみ。
+  - `uv run` は既定で dev 依存もインストールするため、サーバでは `uv run --no-dev` で実行し、pytest を入れないようにする。
 - `uv.lock` はリポジトリにコミットする。
 
 ## ファイル構成
@@ -39,6 +42,7 @@ name = "requarks/wiki"
 ```
 
 - `name`（必須）: `namespace/repo`。`/` を含まなければ `library/` を補う。
+- 同じイメージを 2 回書く（`nginx` と `library/nginx` など）、`/` が 2 つ以上ある、`[[images]]` が 1 つもない場合は書式エラーとする。
 - タグの判定条件は全イメージ共通（下記）。個別の設定項目は当面設けない。
 
 ## 通知対象のタグ
@@ -102,7 +106,7 @@ name = "requarks/wiki"
    - **初回**（`state.json` にそのイメージがない）: 取得できる上限の 10 ページ（1,000 件）まで取得する。
    - **2回目以降**: ページの最後のタグの `last_updated` が `last_checked` より 2 日以上前になった時点で取得を止める。上限は同じく 10 ページ。
    - ログインなしの API では 10 ページより先を取得できない（11 ページ目で HTTP 403 `pagination offset too large for anonymous requests`）。そのため初回に記録されるのは、最近更新された 1,000 件に含まれるバージョンだけになる。
-   - リクエストの間隔は 1 秒空ける。
+   - リクエストの間隔は 1 秒空ける（ページ間、イメージ間とも）。
 3. 対象タグに絞り込み、バージョン番号に正規化する。`x.y` タグは「`x.y` タグの扱い」の条件で絞り込む。
 4. `known_versions` に含まれていないものを新しいバージョンとする。
    - 古いタグが再ビルドされて `last_updated` が新しくなっても、`known_versions` に含まれていれば通知しない。
@@ -115,7 +119,7 @@ name = "requarks/wiki"
 
 ## Discord 通知
 
-1 回の実行で 1 メッセージを送る。Embed は 1 つとし、イメージごとにフィールドを 1 つ作る。
+1 回の実行で、原則 1 メッセージを送る（Discord の制限を超える場合は下記のとおり分ける）。Embed は 1 つとし、イメージごとにフィールドを 1 つ作る。
 
 ```
 🐳 Docker Hub 新バージョン
@@ -138,24 +142,27 @@ requarks/wiki
   - Docker Hub にはリリース日時の項目がないため、タグの `last_updated`（push 日時）を使う。新しく出たバージョンでは、これが Docker Hub に公開された日時になる。
   - `v3.7.20` と `3.7.20` のように同じバージョンのタグが複数あれば、いちばん早い日時を使う。
   - `release: <t:UNIX秒:d>` の形（Discord のタイムスタンプ書式）で日付だけを表示する。時刻はホバーで見られる。日付は見る人の端末のタイムゾーンで決まる。`--dry-run` では実行環境のタイムゾーンで表示する。
-- 1 つのフィールドに収まらないほどバージョンが多い場合は、入りきらない分を「…ほか N 件」とまとめる。
-- Discord の制限（フィールド数は 25 まで、合計 6000 文字まで）を超えた場合は、メッセージを分けて送る。
+  - push 日時がわからないタグ（`last_updated` が空）は、バージョンだけを表示する。
+- 1 つのフィールド（1,024 文字まで）に収まらないほどバージョンが多い場合は、入りきらない分を「…ほか N 件」とまとめる。取得失敗の一覧が収まらない場合は、「⚠️ 取得失敗」のフィールドを複数に分ける。
+- Discord の制限（1 メッセージあたりフィールドは 25 個まで、合計 6,000 文字まで）を超えた場合は、メッセージを分けて送り、タイトルに `(1/2)` のような番号を付ける。
 
 ## エラー処理
 
 | 状況 | 動作 |
 |---|---|
-| 特定イメージの API 取得失敗（ネットワークエラー、HTTP 4xx/5xx） | 最大 3 回再試行する。それでも失敗したら、そのイメージの記録は更新せず、通知にエラーとして含める |
-| HTTP 429（レート制限） | `Retry-After` に従って待ってから再試行する |
-| イメージが存在しない（404） | 再試行せず、エラーとして通知する |
+| 特定イメージの API 取得失敗（通信エラー、タイムアウト 30 秒、HTTP 5xx） | 2 秒、4 秒と待って、合計 3 回まで試す。それでも失敗したら、そのイメージの記録は更新せず、通知にエラーとして含める |
+| HTTP 429（レート制限） | `Retry-After` の秒数（指定がなければ 5 秒、最大 300 秒）待ってから試し直す。回数は上と同じく合計 3 回まで |
+| HTTP 4xx（429 以外） | 試し直さず、エラーとして通知する。404 は「イメージが見つかりません」と表示する |
+| API のレスポンスが想定外の形 | 「想定外のレスポンス」としてエラー通知する |
+| 取得失敗があっても、通知の送信に成功した場合 | 終了コード 0 |
 | `images.toml` の書式エラー、`state.json` の破損 | 終了コード 1 で終了し、stderr に出力する（通知はしない） |
-| `DISCORD_WEBHOOK_URL` が未設定 | 終了コード 1 で終了する |
-| Discord への送信失敗 | 終了コード 1 で終了し、`state.json` は更新しない |
+| `DISCORD_WEBHOOK_URL` が未設定 | 終了コード 1 で終了する（`--dry-run` のときは不要） |
+| Discord への送信失敗 | API と同じ条件で試し直す。それでも失敗したら終了コード 1 で終了し、`state.json` は更新しない |
 
 ## 実行方法
 
 ```sh
-uv run dockerhub-release-notifier --config images.toml --state state.json
+uv run --no-dev dockerhub-release-notifier --config images.toml --state state.json
 ```
 
 - `--config` / `--state` / `--env-file` は省略可能で、省略時はカレントディレクトリの `images.toml` / `state.json` / `.env` を使う。
@@ -166,7 +173,7 @@ uv run dockerhub-release-notifier --config images.toml --state state.json
 crontab の例（cron の `PATH` には uv が入っていないことが多いので、uv は絶対パスで指定する）:
 
 ```
-0 9 * * * cd /opt/dockerhub-release-notifier && $HOME/.local/bin/uv run dockerhub-release-notifier >> notifier.log 2>&1
+0 9 * * * cd /opt/dockerhub-release-notifier && $HOME/.local/bin/uv run --no-dev dockerhub-release-notifier >> notifier.log 2>&1
 ```
 
 ## 対象外（当面やらないこと）
