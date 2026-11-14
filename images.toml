@@ -1,0 +1,11 @@
+# 監視する Docker Hub イメージの一覧
+# 公式イメージは "library/" を省略できる（例: "nginx" → "library/nginx"）
+
+[[images]]
+name = "traefik"
+
+[[images]]
+name = "nginx"
+
+[[images]]
+name = "requarks/wiki"
